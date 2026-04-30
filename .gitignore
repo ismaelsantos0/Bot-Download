@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+downloads/
+cookies_ig.txt
+cookies_x.txt
