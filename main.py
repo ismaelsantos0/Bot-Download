@@ -18,21 +18,17 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# Limites (ajuste no Railway > Variables)
 MAX_MB = int(os.getenv("MAX_MB", "45"))
 MAX_MINUTES = int(os.getenv("MAX_MINUTES", "12"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
 
-# Segurança e Concorrência
-# ALLOWED_USERS_IDS: separados por vírgula (ex: 1234567,9876543)
 ALLOWED_USERS_IDS = [int(u) for u in (os.getenv("ALLOWED_USERS_IDS") or "").split(",") if u.strip().isdigit()]
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3"))
 
 download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
-# Cookies (base64) — opcionais
-IG_COOKIES_B64 = (os.getenv("IG_COOKIES_B64") or "").strip()  # Instagram
-X_COOKIES_B64 = (os.getenv("X_COOKIES_B64") or "").strip()    # X/Twitter (raramente precisa)
+IG_COOKIES_B64 = (os.getenv("IG_COOKIES_B64") or "").strip()
+X_COOKIES_B64 = (os.getenv("X_COOKIES_B64") or "").strip()
 
 IG_COOKIE_PATH = Path("cookies_ig.txt")
 X_COOKIE_PATH = Path("cookies_x.txt")
@@ -42,9 +38,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 if not BOT_TOKEN:
     logging.error("BOT_TOKEN não definido. Configure em Railway > Variables.")
 
+# User-Agent realista
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
 
 def _write_cookiefile(b64_value: str, path: Path, label: str):
     if not b64_value:
+        logging.warning("%s: X_COOKIES_B64 / IG_COOKIES_B64 não configurado.", label)
         return
     try:
         path.write_bytes(base64.b64decode(b64_value))
@@ -72,7 +72,6 @@ def platform_ui(platform: str) -> tuple[str, str]:
 
 
 async def tg_chat_action(chat_id: int, action: str):
-    """action: typing, upload_video"""
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             r = await client.post(
@@ -89,9 +88,6 @@ async def tg_chat_action(chat_id: int, action: str):
 # TELEGRAM SEND/DELETE
 # =========================
 async def tg_send_message(chat_id: int, text: str) -> int | None:
-    """
-    Envia mensagem e retorna message_id (pra conseguir apagar depois).
-    """
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             r = await client.post(
@@ -106,7 +102,6 @@ async def tg_send_message(chat_id: int, text: str) -> int | None:
             if r.status_code != 200:
                 logging.error("sendMessage falhou: %s | %s", r.status_code, r.text)
                 return None
-
             data = r.json()
             return data.get("result", {}).get("message_id")
     except Exception as e:
@@ -115,9 +110,6 @@ async def tg_send_message(chat_id: int, text: str) -> int | None:
 
 
 async def tg_delete_message(chat_id: int, message_id: int) -> bool:
-    """
-    Apaga mensagem do bot. Retorna True se apagou, False se falhou.
-    """
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             r = await client.post(
@@ -127,7 +119,6 @@ async def tg_delete_message(chat_id: int, message_id: int) -> bool:
             if r.status_code != 200:
                 logging.warning("deleteMessage falhou (%s): %s", r.status_code, r.text)
                 return False
-
             data = r.json()
             if not data.get("ok"):
                 logging.warning("deleteMessage ok=false: %s", data)
@@ -164,16 +155,12 @@ def file_size_mb(path: Path) -> float:
 # =========================
 def detect_platform(link: str) -> str | None:
     link = (link or "").strip()
-
     if re.match(r'^(https?://)?(www\.)?(m\.)?(tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com)/', link):
         return "tiktok"
-
     if re.match(r'^(https?://)?(www\.)?instagram\.com/', link):
         return "instagram"
-
     if re.match(r'^(https?://)?(www\.)?(x\.com|twitter\.com)/', link):
         return "x"
-
     return None
 
 
@@ -193,10 +180,13 @@ def extract_info_no_download(url: str, platform: str) -> dict:
         "quiet": True,
         "noplaylist": True,
         "skip_download": True,
-        "http_headers": {"User-Agent": "Mozilla/5.0"},
-        "extractor_args": {"tiktok": ["api_hostname=api16-normal-c-useast1a.tiktokv.com"]},
+        "http_headers": {"User-Agent": UA},
+        "extractor_args": {
+            "tiktok": ["api_hostname=api16-normal-c-useast1a.tiktokv.com"],
+        },
     }
     cf = _cookiefile_for(platform)
+    logging.info("[%s] cookiefile: %s | existe: %s", platform, cf, Path(cf).exists() if cf else False)
     if cf:
         ydl_opts["cookiefile"] = cf
 
@@ -212,10 +202,11 @@ def download_media(url: str, platform: str) -> Path:
         "restrictfilenames": True,
         "quiet": True,
         "noplaylist": True,
-        "http_headers": {"User-Agent": "Mozilla/5.0"},
-        "extractor_args": {"tiktok": ["api_hostname=api16-normal-c-useast1a.tiktokv.com"]},
+        "http_headers": {"User-Agent": UA},
+        "extractor_args": {
+            "tiktok": ["api_hostname=api16-normal-c-useast1a.tiktokv.com"],
+        },
     }
-
     cf = _cookiefile_for(platform)
     if cf:
         ydl_opts["cookiefile"] = cf
@@ -226,10 +217,9 @@ def download_media(url: str, platform: str) -> Path:
 
 
 # =========================
-# CORE LOGIC (AUTO-DELETE PROGRESS)
+# CORE LOGIC
 # =========================
 async def handle_text(chat_id: int, text: str):
-    # --- Segurança: Whitelist ---
     if ALLOWED_USERS_IDS and chat_id not in ALLOWED_USERS_IDS:
         logging.info("Acesso negado para o chat_id: %s", chat_id)
         await tg_send_message(chat_id, "🚫 *Acesso negado.*\nEste bot é privado e você não está na lista de usuários permitidos.")
@@ -242,7 +232,6 @@ async def handle_text(chat_id: int, text: str):
         if mid:
             progress_msgs.append(mid)
 
-    # comandos
     if text == "/start":
         await tg_send_message(
             chat_id,
@@ -281,7 +270,6 @@ async def handle_text(chat_id: int, text: str):
     file_path: Path | None = None
 
     try:
-        # info
         info = await asyncio.to_thread(extract_info_no_download, text, platform)
         duration = info.get("duration")
         title = (info.get("title") or "vídeo").strip()
@@ -302,14 +290,11 @@ async def handle_text(chat_id: int, text: str):
                     await tg_delete_message(chat_id, m)
                 return
 
-        # --- Controle de Concorrência (Semaphore) ---
-        # Se houver muitos downloads, ele envia a mensagem e aguarda a vez dele na fila
         track(await tg_send_message(chat_id, f"⬇️ *Baixando/Na fila:* `{title[:80]}`\n⏳ Aguarde..."))
-        
+
         async with download_semaphore:
             await tg_chat_action(chat_id, "typing")
-            
-            # download real
+
             file_path = await asyncio.to_thread(download_media, text, platform)
 
             if not file_path.exists():
@@ -337,19 +322,15 @@ async def handle_text(chat_id: int, text: str):
             await tg_chat_action(chat_id, "upload_video")
             track(await tg_send_message(chat_id, f"📤 *Enviando* ({size_mb:.1f} MB)..."))
 
-            # envia vídeo
             await tg_send_video(chat_id, file_path)
 
-        # 👇 importante: espera um pouquinho e apaga com retry
         await asyncio.sleep(1)
-
         for mid in progress_msgs:
             for _ in range(3):
                 if await tg_delete_message(chat_id, mid):
                     break
                 await asyncio.sleep(0.4)
 
-        # opcional: mensagem final e apaga também
         done_id = await tg_send_message(chat_id, "✅ *Pronto!*")
         await asyncio.sleep(1)
         if done_id:
@@ -358,7 +339,6 @@ async def handle_text(chat_id: int, text: str):
     except Exception as e:
         logging.exception("Erro no processamento")
 
-        # limpa progresso mesmo em erro
         await asyncio.sleep(0.5)
         for mid in progress_msgs:
             for _ in range(2):
@@ -374,6 +354,18 @@ async def handle_text(chat_id: int, text: str):
                 "🔒 *Esse conteúdo parece exigir login/permissão.*\n"
                 "Se for privado/restrito, pode falhar mesmo.\n"
                 "Tenta um post público."
+            )
+        elif "Bad guest token" in msg or "guest token" in msg.lower():
+            friendly = (
+                "⚠️ *Erro de autenticação com o X.*\n"
+                "Os cookies podem estar expirados ou ausentes.\n"
+                "Renove os cookies e atualize a variável X_COOKIES_B64 no Railway."
+            )
+        elif "No video could be found" in msg:
+            friendly = (
+                "🎞️ *Nenhum vídeo encontrado nesse tweet.*\n"
+                "Confirma que o link tem vídeo e não é só imagem ou texto.\n"
+                "Se for conteúdo adulto, verifique se os cookies do X estão configurados."
             )
         elif "HTTP Error 429" in msg or "Too Many Requests" in msg:
             friendly = "🚦 *Muitas tentativas seguidas.*\nEspera um pouco e tenta novamente."
@@ -391,7 +383,6 @@ async def handle_text(chat_id: int, text: str):
             await tg_delete_message(chat_id, err_id)
 
     finally:
-        # apaga arquivo baixado
         try:
             if file_path and file_path.exists():
                 file_path.unlink()
@@ -405,6 +396,7 @@ async def handle_text(chat_id: int, text: str):
 @app.get("/")
 def health():
     return {"ok": True}
+
 
 @app.post("/telegram")
 async def telegram_webhook(req: Request):
@@ -420,7 +412,6 @@ async def telegram_webhook(req: Request):
     if not chat_id or not text:
         return {"status": "ignored"}
 
-    # Dispara o handler no background sem travar o retorno do Webhook (Evita loop infinito de webhook do Telegram)
     asyncio.create_task(handle_text(int(chat_id), text))
-    
+
     return {"status": "ok"}
