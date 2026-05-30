@@ -1,5 +1,9 @@
+Aqui está o código completo e atualizado com a sua nova versão da função `download_media`. Aproveitei para mover o `import time` para o topo do arquivo junto com as outras importações (uma boa prática em Python), mantendo a lógica de espera e verificação do tamanho do arquivo exatamente como você pediu.
+
+```python
 import os
 import re
+import time
 import logging
 import asyncio
 import base64
@@ -207,6 +211,7 @@ def download_media(url: str, platform: str) -> Path:
         "extractor_args": {
             "tiktok": ["api_hostname=api16-normal-c-useast1a.tiktokv.com"],
         },
+        "postprocessors": [],  # não adiciona pós-processadores extras
     }
     cf = _cookiefile_for(platform)
     if cf:
@@ -216,7 +221,6 @@ def download_media(url: str, platform: str) -> Path:
         info = ydl.extract_info(url, download=True)
 
         real_path = None
-
         requested = info.get("requested_downloads") or []
         if requested:
             fp = requested[0].get("filepath")
@@ -236,7 +240,17 @@ def download_media(url: str, platform: str) -> Path:
             if candidates:
                 real_path = candidates[0]
 
-        logging.info("Arquivo final: %s | existe: %s", real_path, real_path.exists() if real_path else False)
+        # Aguarda o arquivo estar completamente escrito (merge do ffmpeg)
+        for _ in range(20):
+            if real_path and real_path.exists() and real_path.stat().st_size > 0:
+                time.sleep(1)  # 1s extra de segurança
+                break
+            time.sleep(0.5)
+
+        logging.info("Arquivo final: %s | existe: %s | tamanho: %s bytes",
+                     real_path,
+                     real_path.exists() if real_path else False,
+                     real_path.stat().st_size if real_path and real_path.exists() else 0)
         return real_path
 
 
@@ -442,3 +456,5 @@ async def telegram_webhook(req: Request):
     asyncio.create_task(handle_text(int(chat_id), text))
 
     return {"status": "ok"}
+
+```
