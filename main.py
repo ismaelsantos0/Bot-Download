@@ -251,7 +251,6 @@ async def split_video(file_path: Path, max_mb: int) -> list[Path]:
     if size_mb <= max_mb:
         return [file_path]
 
-    # 1. Descobre a duração total do vídeo
     cmd_probe = [
         "ffprobe", "-v", "error", "-show_entries", "format=duration", 
         "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)
@@ -262,12 +261,10 @@ async def split_video(file_path: Path, max_mb: int) -> list[Path]:
     try:
         duration = float(stdout.decode().strip())
     except (ValueError, TypeError):
-        duration = 600.0  # fallback
+        duration = 600.0  
 
-    # 2. Calcula o tempo de cada segmento (margem de segurança de 10%)
     segment_time = max(10, int(duration * (max_mb / size_mb) * 0.90))
 
-    # 3. Corta o vídeo 
     output_pattern = file_path.with_name(f"{file_path.stem}_part%03d.mp4")
     cmd_split = [
         "ffmpeg", "-i", str(file_path),
@@ -284,7 +281,6 @@ async def split_video(file_path: Path, max_mb: int) -> list[Path]:
     )
     await proc_split.communicate()
 
-    # 4. Retorna as partes geradas
     parts = sorted(file_path.parent.glob(f"{file_path.stem}_part*.mp4"))
     return parts
 
@@ -364,7 +360,14 @@ async def handle_text(chat_id: int, text: str):
                     await tg_delete_message(chat_id, m)
                 return
 
-        track(await tg_send_message(chat_id, f"⬇️ *Baixando/Na fila:* `{title[:80]}`\n⏳ Aguarde..."))
+        # ==========================================
+        # NOVO: Mensagem permanente com o nome do vídeo 
+        # (Não usa o `track()`, logo não será apagada)
+        # ==========================================
+        await tg_send_message(chat_id, f"🎬 *Título:* `{title[:120]}`")
+        
+        # Mensagem temporária avisando do download
+        track(await tg_send_message(chat_id, "⬇️ *Baixando o vídeo...*\n⏳ Aguarde..."))
 
         async with download_semaphore:
             await tg_chat_action(chat_id, "typing")
@@ -380,7 +383,6 @@ async def handle_text(chat_id: int, text: str):
 
             size_mb = file_size_mb(file_path)
             
-            # --- NOVA LÓGICA DE DIVISÃO DE VÍDEO AQUI ---
             if size_mb > MAX_MB:
                 track(await tg_send_message(
                     chat_id, 
@@ -395,12 +397,18 @@ async def handle_text(chat_id: int, text: str):
                     return
                 
                 for i, part in enumerate(parts, start=1):
-                    track(await tg_send_message(chat_id, f"📤 *Enviando Parte {i}/{len(parts)}*..."))
+                    # Mensagem PERMANENTE avisando a parte
+                    await tg_send_message(chat_id, f"📦 *Parte {i}/{len(parts)}*")
+                    
+                    # Mensagem TEMPORÁRIA de upload
+                    upload_msg = await tg_send_message(chat_id, "📤 *Fazendo upload da parte...*")
+                    track(upload_msg)
+                    
                     await tg_send_video(chat_id, part)
-                    await asyncio.sleep(1) # Pausa leve para segurança da API do Telegram
+                    await asyncio.sleep(1) 
             else:
                 await tg_chat_action(chat_id, "upload_video")
-                track(await tg_send_message(chat_id, f"📤 *Enviando* ({size_mb:.1f} MB)..."))
+                track(await tg_send_message(chat_id, f"📤 *Enviando arquivo* ({size_mb:.1f} MB)..."))
                 await tg_send_video(chat_id, file_path)
 
         await asyncio.sleep(1)
@@ -464,10 +472,8 @@ async def handle_text(chat_id: int, text: str):
     finally:
         try:
             if file_path:
-                # Deleta o arquivo original caso exista
                 if file_path.exists():
                     file_path.unlink()
-                # Deleta todas as partes fragmentadas caso existam
                 for p in file_path.parent.glob(f"{file_path.stem}_part*.mp4"):
                     p.unlink()
                 logging.info("Limpeza de arquivos concluída para: %s", file_path.stem)
