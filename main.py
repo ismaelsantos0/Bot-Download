@@ -194,12 +194,17 @@ def extract_info_no_download(url: str, platform: str) -> dict:
 
 
 def download_media(url: str, platform: str) -> Path:
+    """
+    Baixa o vídeo e retorna o Path real do arquivo no disco.
+    Usa o 'filepath' do resultado quando disponível (pós-merge),
+    e faz fallback buscando o arquivo mais recente na pasta de downloads.
+    """
     ydl_opts = {
         "format": "bv*+ba/best",
         "merge_output_format": "mp4",
         "outtmpl": str(DOWNLOAD_DIR / "%(id)s.%(ext)s"),
         "restrictfilenames": True,
-        "quiet": True,
+        "quiet": False,  # mostra progresso no log
         "noplaylist": True,
         "http_headers": {"User-Agent": UA},
         "extractor_args": {
@@ -212,7 +217,34 @@ def download_media(url: str, platform: str) -> Path:
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        return Path(ydl.prepare_filename(info))
+
+        # 1) Tenta pegar o filepath real do resultado (disponível após merge)
+        real_path = None
+
+        # yt-dlp coloca o arquivo final em info["requested_downloads"][0]["filepath"]
+        requested = info.get("requested_downloads") or []
+        if requested:
+            fp = requested[0].get("filepath")
+            if fp:
+                real_path = Path(fp)
+
+        # 2) Fallback: prepare_filename com extensão forçada para mp4
+        if not real_path or not real_path.exists():
+            guessed = Path(ydl.prepare_filename(info)).with_suffix(".mp4")
+            if guessed.exists():
+                real_path = guessed
+
+        # 3) Fallback final: arquivo mais recente na pasta de downloads
+        if not real_path or not real_path.exists():
+            video_id = info.get("id", "")
+            candidates = list(DOWNLOAD_DIR.glob(f"{video_id}.*"))
+            if not candidates:
+                candidates = sorted(DOWNLOAD_DIR.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if candidates:
+                real_path = candidates[0]
+
+        logging.info("Arquivo final: %s | existe: %s", real_path, real_path.exists() if real_path else False)
+        return real_path
 
 
 # =========================
@@ -296,7 +328,7 @@ async def handle_text(chat_id: int, text: str):
 
             file_path = await asyncio.to_thread(download_media, text, platform)
 
-            if not file_path.exists():
+            if not file_path or not file_path.exists():
                 track(await tg_send_message(chat_id, "🚫 *Falha no download.* Arquivo não apareceu após baixar."))
                 await asyncio.sleep(3)
                 for m in progress_msgs:
