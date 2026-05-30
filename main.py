@@ -167,7 +167,7 @@ def detect_platform(link: str) -> str | None:
 
 
 # =========================
-# YT-DLP
+# YT-DLP & FFMPEG
 # =========================
 def _cookiefile_for(platform: str) -> str | None:
     if platform == "instagram" and IG_COOKIE_PATH.exists():
@@ -188,7 +188,6 @@ def extract_info_no_download(url: str, platform: str) -> dict:
         },
     }
     cf = _cookiefile_for(platform)
-    logging.info("[%s] cookiefile: %s | existe: %s", platform, cf, Path(cf).exists() if cf else False)
     if cf:
         ydl_opts["cookiefile"] = cf
 
@@ -208,7 +207,7 @@ def download_media(url: str, platform: str) -> Path:
         "extractor_args": {
             "tiktok": ["api_hostname=api16-normal-c-useast1a.tiktokv.com"],
         },
-        "postprocessors": [],  # não adiciona pós-processadores extras
+        "postprocessors": [],  
     }
     cf = _cookiefile_for(platform)
     if cf:
@@ -237,18 +236,57 @@ def download_media(url: str, platform: str) -> Path:
             if candidates:
                 real_path = candidates[0]
 
-        # Aguarda o arquivo estar completamente escrito (merge do ffmpeg)
         for _ in range(20):
             if real_path and real_path.exists() and real_path.stat().st_size > 0:
-                time.sleep(1)  # 1s extra de segurança
+                time.sleep(1) 
                 break
             time.sleep(0.5)
 
-        logging.info("Arquivo final: %s | existe: %s | tamanho: %s bytes",
-                     real_path,
-                     real_path.exists() if real_path else False,
-                     real_path.stat().st_size if real_path and real_path.exists() else 0)
         return real_path
+
+
+async def split_video(file_path: Path, max_mb: int) -> list[Path]:
+    """Divide um vídeo grande em várias partes menores usando ffmpeg."""
+    size_mb = file_path.stat().st_size / (1024 * 1024)
+    if size_mb <= max_mb:
+        return [file_path]
+
+    # 1. Descobre a duração total do vídeo
+    cmd_probe = [
+        "ffprobe", "-v", "error", "-show_entries", "format=duration", 
+        "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)
+    ]
+    proc_probe = await asyncio.create_subprocess_exec(*cmd_probe, stdout=asyncio.subprocess.PIPE)
+    stdout, _ = await proc_probe.communicate()
+    
+    try:
+        duration = float(stdout.decode().strip())
+    except (ValueError, TypeError):
+        duration = 600.0  # fallback
+
+    # 2. Calcula o tempo de cada segmento (margem de segurança de 10%)
+    segment_time = max(10, int(duration * (max_mb / size_mb) * 0.90))
+
+    # 3. Corta o vídeo 
+    output_pattern = file_path.with_name(f"{file_path.stem}_part%03d.mp4")
+    cmd_split = [
+        "ffmpeg", "-i", str(file_path),
+        "-c", "copy",
+        "-f", "segment",
+        "-segment_time", str(segment_time),
+        "-reset_timestamps", "1",
+        str(output_pattern)
+    ]
+    
+    logging.info("Dividindo vídeo de %.1f MB em segmentos de %s segundos...", size_mb, segment_time)
+    proc_split = await asyncio.create_subprocess_exec(
+        *cmd_split, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    await proc_split.communicate()
+
+    # 4. Retorna as partes geradas
+    parts = sorted(file_path.parent.glob(f"{file_path.stem}_part*.mp4"))
+    return parts
 
 
 # =========================
@@ -273,7 +311,8 @@ async def handle_text(chat_id: int, text: str):
             "✅ *Online!*\n\n"
             "Me manda um link e eu devolvo o vídeo.\n"
             "*Suporta:* TikTok 🎵 | Instagram 📸 (reel/post) | X 🐦\n\n"
-            f"⚙️ *Limites:* até {MAX_MINUTES} min (quando disponível) e {MAX_MB} MB.\n"
+            f"⚙️ *Limites:* até {MAX_MINUTES} min.\n"
+            "📦 *Grandes arquivos:* Se passar do limite do Telegram, eu corto e envio em partes automaticamente.\n\n"
             "🧹 Depois que o vídeo chega, eu apago as mensagens de progresso."
         )
         return
@@ -340,26 +379,29 @@ async def handle_text(chat_id: int, text: str):
                 return
 
             size_mb = file_size_mb(file_path)
+            
+            # --- NOVA LÓGICA DE DIVISÃO DE VÍDEO AQUI ---
             if size_mb > MAX_MB:
-                track(
-                    await tg_send_message(
-                        chat_id,
-                        f"📦 *Arquivo grande demais:* {size_mb:.1f} MB\n"
-                        f"✅ *Limite:* {MAX_MB} MB\n\n"
-                        "Tenta outro vídeo (ou um mais curto)."
-                    )
-                )
-                await asyncio.sleep(3)
-                for m in progress_msgs:
-                    await tg_delete_message(chat_id, m)
-                return
-
-            await tg_chat_action(chat_id, "upload_video")
-            track(await tg_send_message(chat_id, f"📤 *Enviando* ({size_mb:.1f} MB)..."))
-
-            logging.info("Chamando sendVideo para chat_id=%s arquivo=%s", chat_id, file_path)
-            await tg_send_video(chat_id, file_path)
-            logging.info("sendVideo finalizado com sucesso")
+                track(await tg_send_message(
+                    chat_id, 
+                    f"📦 *Vídeo grande ({size_mb:.1f} MB).* Dividindo em partes de {MAX_MB} MB para o Telegram aceitar... ✂️"
+                ))
+                await tg_chat_action(chat_id, "upload_video")
+                
+                parts = await split_video(file_path, MAX_MB)
+                
+                if not parts:
+                    track(await tg_send_message(chat_id, "❌ Falha ao tentar dividir o vídeo."))
+                    return
+                
+                for i, part in enumerate(parts, start=1):
+                    track(await tg_send_message(chat_id, f"📤 *Enviando Parte {i}/{len(parts)}*..."))
+                    await tg_send_video(chat_id, part)
+                    await asyncio.sleep(1) # Pausa leve para segurança da API do Telegram
+            else:
+                await tg_chat_action(chat_id, "upload_video")
+                track(await tg_send_message(chat_id, f"📤 *Enviando* ({size_mb:.1f} MB)..."))
+                await tg_send_video(chat_id, file_path)
 
         await asyncio.sleep(1)
         for mid in progress_msgs:
@@ -421,9 +463,14 @@ async def handle_text(chat_id: int, text: str):
 
     finally:
         try:
-            if file_path and file_path.exists():
-                file_path.unlink()
-                logging.info("Arquivo deletado: %s", file_path)
+            if file_path:
+                # Deleta o arquivo original caso exista
+                if file_path.exists():
+                    file_path.unlink()
+                # Deleta todas as partes fragmentadas caso existam
+                for p in file_path.parent.glob(f"{file_path.stem}_part*.mp4"):
+                    p.unlink()
+                logging.info("Limpeza de arquivos concluída para: %s", file_path.stem)
         except Exception:
             pass
 
