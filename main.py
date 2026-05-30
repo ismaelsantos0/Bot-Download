@@ -38,7 +38,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 if not BOT_TOKEN:
     logging.error("BOT_TOKEN não definido. Configure em Railway > Variables.")
 
-# User-Agent realista
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 
@@ -131,12 +130,12 @@ async def tg_delete_message(chat_id: int, message_id: int) -> bool:
 
 async def tg_send_video(chat_id: int, file_path: Path):
     try:
-        async with httpx.AsyncClient(timeout=180) as client:
+        async with httpx.AsyncClient(timeout=300) as client:
             with file_path.open("rb") as f:
                 r = await client.post(
                     f"{TELEGRAM_API}/sendVideo",
-                    data={"chat_id": chat_id},
-                    files={"video": f},
+                    data={"chat_id": chat_id, "supports_streaming": "true"},
+                    files={"video": (file_path.name, f, "video/mp4")},
                 )
             if r.status_code != 200:
                 logging.error("sendVideo falhou: %s | %s", r.status_code, r.text)
