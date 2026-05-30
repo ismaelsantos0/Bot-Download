@@ -1,6 +1,3 @@
-Aqui está o código completo e atualizado com a sua nova versão da função `download_media`. Aproveitei para mover o `import time` para o topo do arquivo junto com as outras importações (uma boa prática em Python), mantendo a lógica de espera e verificação do tamanho do arquivo exatamente como você pediu.
-
-```python
 import os
 import re
 import time
@@ -456,5 +453,3 @@ async def telegram_webhook(req: Request):
     asyncio.create_task(handle_text(int(chat_id), text))
 
     return {"status": "ok"}
-
-```
