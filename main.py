@@ -129,6 +129,7 @@ async def tg_delete_message(chat_id: int, message_id: int) -> bool:
 
 
 async def tg_send_video(chat_id: int, file_path: Path):
+    logging.info("sendVideo: iniciando upload de %s (%.1f MB)", file_path.name, file_path.stat().st_size / 1024 / 1024)
     try:
         async with httpx.AsyncClient(timeout=300) as client:
             with file_path.open("rb") as f:
@@ -137,6 +138,7 @@ async def tg_send_video(chat_id: int, file_path: Path):
                     data={"chat_id": chat_id, "supports_streaming": "true"},
                     files={"video": (file_path.name, f, "video/mp4")},
                 )
+            logging.info("sendVideo resposta: %s | %s", r.status_code, r.text[:300])
             if r.status_code != 200:
                 logging.error("sendVideo falhou: %s | %s", r.status_code, r.text)
             r.raise_for_status()
@@ -194,17 +196,12 @@ def extract_info_no_download(url: str, platform: str) -> dict:
 
 
 def download_media(url: str, platform: str) -> Path:
-    """
-    Baixa o vídeo e retorna o Path real do arquivo no disco.
-    Usa o 'filepath' do resultado quando disponível (pós-merge),
-    e faz fallback buscando o arquivo mais recente na pasta de downloads.
-    """
     ydl_opts = {
         "format": "bv*+ba/best",
         "merge_output_format": "mp4",
         "outtmpl": str(DOWNLOAD_DIR / "%(id)s.%(ext)s"),
         "restrictfilenames": True,
-        "quiet": False,  # mostra progresso no log
+        "quiet": False,
         "noplaylist": True,
         "http_headers": {"User-Agent": UA},
         "extractor_args": {
@@ -218,23 +215,19 @@ def download_media(url: str, platform: str) -> Path:
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
 
-        # 1) Tenta pegar o filepath real do resultado (disponível após merge)
         real_path = None
 
-        # yt-dlp coloca o arquivo final em info["requested_downloads"][0]["filepath"]
         requested = info.get("requested_downloads") or []
         if requested:
             fp = requested[0].get("filepath")
             if fp:
                 real_path = Path(fp)
 
-        # 2) Fallback: prepare_filename com extensão forçada para mp4
         if not real_path or not real_path.exists():
             guessed = Path(ydl.prepare_filename(info)).with_suffix(".mp4")
             if guessed.exists():
                 real_path = guessed
 
-        # 3) Fallback final: arquivo mais recente na pasta de downloads
         if not real_path or not real_path.exists():
             video_id = info.get("id", "")
             candidates = list(DOWNLOAD_DIR.glob(f"{video_id}.*"))
@@ -353,7 +346,9 @@ async def handle_text(chat_id: int, text: str):
             await tg_chat_action(chat_id, "upload_video")
             track(await tg_send_message(chat_id, f"📤 *Enviando* ({size_mb:.1f} MB)..."))
 
+            logging.info("Chamando sendVideo para chat_id=%s arquivo=%s", chat_id, file_path)
             await tg_send_video(chat_id, file_path)
+            logging.info("sendVideo finalizado com sucesso")
 
         await asyncio.sleep(1)
         for mid in progress_msgs:
@@ -417,6 +412,7 @@ async def handle_text(chat_id: int, text: str):
         try:
             if file_path and file_path.exists():
                 file_path.unlink()
+                logging.info("Arquivo deletado: %s", file_path)
         except Exception:
             pass
 
