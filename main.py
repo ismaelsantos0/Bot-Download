@@ -103,6 +103,22 @@ async def tg_delete_message(chat_id: int, message_id: int) -> bool:
     except Exception as e:
         logging.warning("deleteMessage exception: %s", e)
         return False
+def extract_direct_mp4(info: dict) -> str | None:
+    url = info.get("url")
+    if url and ".mp4" in url and "m3u8" not in url:
+        return url
+    formats = info.get("formats", [])
+    if not formats and "entries" in info and info["entries"]:
+        formats = info["entries"][0].get("formats", [])
+    mp4_formats = [
+        f for f in formats 
+        if f.get("ext") == "mp4" 
+        and f.get("vcodec") not in ("none", None)
+        and "m3u8" not in f.get("protocol", "")
+    ]
+    if mp4_formats:
+        return mp4_formats[-1].get("url")
+    return None
 async def tg_send_video(chat_id: int, file_path: Path):
     logging.info("sendVideo: iniciando upload de %s (%.1f MB)", file_path.name, file_path.stat().st_size / 1024 / 1024)
     try:
@@ -320,7 +336,7 @@ async def handle_text(chat_id: int, text: str):
             size_mb = file_size_mb(file_path)
             if size_mb > MAX_MB:
                 # Extrai o link direto de download se existir no info do yt-dlp
-                direct_url = info.get("url")
+                direct_url = extract_direct_mp4(info)
                 if direct_url:
                     msg = (
                         f"📦 *Vídeo grande ({size_mb:.1f} MB).* O Telegram barra arquivos acima de 50MB.\n\n"
