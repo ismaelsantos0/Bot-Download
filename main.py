@@ -119,6 +119,25 @@ def extract_direct_mp4(info: dict) -> str | None:
     if mp4_formats:
         return mp4_formats[-1].get("url")
     return None
+
+async def upload_large_file(file_path: Path) -> str | None:
+    try:
+        logging.info("Fazendo upload de %s para tmpfiles.org...", file_path.name)
+        async with httpx.AsyncClient(timeout=600) as client:
+            with file_path.open("rb") as f:
+                r = await client.post(
+                    "https://tmpfiles.org/api/v1/upload",
+                    files={"file": (file_path.name, f, "video/mp4")}
+                )
+            if r.status_code == 200:
+                data = r.json()
+                url = data.get("data", {}).get("url")
+                if url:
+                    return url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+    except Exception as e:
+        logging.error("Erro no upload_large_file: %s", e)
+    return None
+
 async def tg_send_video(chat_id: int, file_path: Path):
     logging.info("sendVideo: iniciando upload de %s (%.1f MB)", file_path.name, file_path.stat().st_size / 1024 / 1024)
     try:
@@ -337,11 +356,19 @@ async def handle_text(chat_id: int, text: str):
             if size_mb > MAX_MB:
                 # Extrai o link direto de download se existir no info do yt-dlp
                 direct_url = extract_direct_mp4(info)
+                
+                # Se não tem link original disponível, fazemos upload do arquivo que já baixamos!
+                if not direct_url:
+                    upload_msg = await tg_send_message(chat_id, "📦 *Vídeo.* Gerando link de download temporário... ⏳")
+                    track(upload_msg)
+                    await tg_chat_action(chat_id, "upload_document")
+                    direct_url = await upload_large_file(file_path)
+
                 if direct_url:
                     msg = (
-                        f"📦 *Vídeo grande ({size_mb:.1f} MB).* O Telegram barra arquivos acima de 50MB.\n\n"
-                        f"🔗 *[Clique aqui para baixar ou assistir o vídeo direto]({direct_url})*\n"
-                        f"_(Pode expirar em algumas horas)_"
+                        f"📦 *Vídeo grande ({size_mb:.1f} MB).* O Telegram barra envios acima do limite.\n\n"
+                        f"🔗 *[Clique aqui para baixar o vídeo completo]({direct_url})*\n"
+                        f"_(O link expira em 1 hora)_"
                     )
                 else:
                     msg = (
