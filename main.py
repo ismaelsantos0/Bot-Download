@@ -239,38 +239,7 @@ def download_media(url: str, platform: str) -> Path:
                 break
             time.sleep(0.5)
         return real_path
-async def split_video(file_path: Path, max_mb: int) -> list[Path]:
-    """Divide um vídeo grande em várias partes menores usando ffmpeg."""
-    size_mb = file_path.stat().st_size / (1024 * 1024)
-    if size_mb <= max_mb:
-        return [file_path]
-    cmd_probe = [
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)
-    ]
-    proc_probe = await asyncio.create_subprocess_exec(*cmd_probe, stdout=asyncio.subprocess.PIPE)
-    stdout, _ = await proc_probe.communicate()
-    try:
-        duration = float(stdout.decode().strip())
-    except (ValueError, TypeError):
-        duration = 600.0
-    segment_time = max(10, int(duration * (max_mb / size_mb) * 0.90))
-    output_pattern = file_path.with_name(f"{file_path.stem}_part%03d.mp4")
-    cmd_split = [
-        "ffmpeg", "-i", str(file_path),
-        "-c", "copy",
-        "-f", "segment",
-        "-segment_time", str(segment_time),
-        "-reset_timestamps", "1",
-        str(output_pattern)
-    ]
-    logging.info("Dividindo vídeo de %.1f MB em segmentos de %s segundos...", size_mb, segment_time)
-    proc_split = await asyncio.create_subprocess_exec(
-        *cmd_split, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    await proc_split.communicate()
-    parts = sorted(file_path.parent.glob(f"{file_path.stem}_part*.mp4"))
-    return parts
+
 # =========================
 # CORE LOGIC
 # =========================
@@ -291,7 +260,7 @@ async def handle_text(chat_id: int, text: str):
             "Me manda um link e eu devolvo o vídeo.\n"
             "*Suporta:* TikTok 🎵 | Instagram 📸 (reel/post) | X 🐦\n\n"
             f"⚙️ *Limites:* até {MAX_MINUTES} min.\n"
-            "📦 *Grandes arquivos:* Se passar do limite do Telegram, eu corto e envio em partes automaticamente.\n\n"
+            "📦 *Grandes arquivos:* Se passar do limite do Telegram, eu aviso para você assistir no link original.\n\n"
             "🧹 Depois que o vídeo chega, eu apago as mensagens de progresso."
         )
         return
@@ -350,23 +319,20 @@ async def handle_text(chat_id: int, text: str):
                 return
             size_mb = file_size_mb(file_path)
             if size_mb > MAX_MB:
-                track(await tg_send_message(
-                    chat_id,
-                    f"📦 *Vídeo grande ({size_mb:.1f} MB).* Dividindo em partes de {MAX_MB} MB para o Telegram aceitar... ✂️"
-                ))
-                await tg_chat_action(chat_id, "upload_video")
-                parts = await split_video(file_path, MAX_MB)
-                if not parts:
-                    track(await tg_send_message(chat_id, "❌ Falha ao tentar dividir o vídeo."))
-                    return
-                for i, part in enumerate(parts, start=1):
-                    # Mensagem permanente avisando a parte
-                    await tg_send_message(chat_id, f"📦 *Parte {i}/{len(parts)}*")
-                    # Mensagem temporária de upload
-                    upload_msg = await tg_send_message(chat_id, "📤 *Fazendo upload da parte...*")
-                    track(upload_msg)
-                    await tg_send_video(chat_id, part)
-                    await asyncio.sleep(1)
+                # Extrai o link direto de download se existir no info do yt-dlp
+                direct_url = info.get("url")
+                if direct_url:
+                    msg = (
+                        f"📦 *Vídeo grande ({size_mb:.1f} MB).* O Telegram barra arquivos acima de 50MB.\n\n"
+                        f"🔗 *[Clique aqui para baixar ou assistir o vídeo direto]({direct_url})*\n"
+                        f"_(Pode expirar em algumas horas)_"
+                    )
+                else:
+                    msg = (
+                        f"📦 *Vídeo grande ({size_mb:.1f} MB).* O Telegram não aceita envios tão grandes através de bots.\n"
+                        f"🔗 Assista pelo link original do post:\n{text}"
+                    )
+                await tg_send_message(chat_id, msg)
             else:
                 await tg_chat_action(chat_id, "upload_video")
                 track(await tg_send_message(chat_id, f"📤 *Enviando arquivo* ({size_mb:.1f} MB)..."))
@@ -427,8 +393,6 @@ async def handle_text(chat_id: int, text: str):
             if file_path:
                 if file_path.exists():
                     file_path.unlink()
-                for p in file_path.parent.glob(f"{file_path.stem}_part*.mp4"):
-                    p.unlink()
                 logging.info("Limpeza de arquivos concluída para: %s", file_path.stem)
         except Exception:
             pass
