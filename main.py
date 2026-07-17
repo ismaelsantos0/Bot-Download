@@ -122,20 +122,25 @@ def extract_direct_mp4(info: dict) -> str | None:
 
 async def upload_large_file(file_path: Path) -> str | None:
     try:
-        logging.info("Fazendo upload de %s para tmpfiles.org...", file_path.name)
+        logging.info("Fazendo upload de %s para gofile.io...", file_path.name)
         async with httpx.AsyncClient(timeout=600) as client:
+            # 1. Pega um servidor disponível
+            r_server = await client.get("https://api.gofile.io/servers")
+            server_name = r_server.json().get("data", {}).get("servers", [{}])[0].get("name")
+            if not server_name:
+                raise ValueError("Nenhum servidor do gofile encontrado")
+            
+            # 2. Faz o upload
             with file_path.open("rb") as f:
                 r = await client.post(
-                    "https://tmpfiles.org/api/v1/upload",
+                    f"https://{server_name}.gofile.io/contents/uploadfile",
                     files={"file": (file_path.name, f, "video/mp4")}
                 )
             if r.status_code == 200:
                 data = r.json()
-                url = data.get("data", {}).get("url")
-                if url:
-                    return url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+                return data.get("data", {}).get("downloadPage")
     except Exception as e:
-        logging.error("Erro no upload_large_file: %s", e)
+        logging.error("Erro no upload_large_file (gofile): %s", e)
     return None
 
 async def tg_send_video(chat_id: int, file_path: Path):
