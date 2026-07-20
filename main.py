@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 import yt_dlp
 from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
 # =========================
 # CONFIG
 # =========================
@@ -15,6 +16,9 @@ BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+PUBLIC_URL = (os.getenv("PUBLIC_URL") or os.getenv("RAILWAY_PUBLIC_DOMAIN", "")).strip()
+if PUBLIC_URL and not PUBLIC_URL.startswith("http"):
+    PUBLIC_URL = f"https://{PUBLIC_URL}"
 MAX_MB = int(os.getenv("MAX_MB", "45"))
 MAX_MINUTES = int(os.getenv("MAX_MINUTES", "12"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
@@ -120,28 +124,14 @@ def extract_direct_mp4(info: dict) -> str | None:
         return mp4_formats[-1].get("url")
     return None
 
-async def upload_large_file(file_path: Path) -> str | None:
+async def delayed_delete(file_path: Path):
+    await asyncio.sleep(2 * 3600)  # 2 horas
     try:
-        logging.info("Fazendo upload de %s para gofile.io...", file_path.name)
-        async with httpx.AsyncClient(timeout=600) as client:
-            # 1. Pega um servidor disponível
-            r_server = await client.get("https://api.gofile.io/servers")
-            server_name = r_server.json().get("data", {}).get("servers", [{}])[0].get("name")
-            if not server_name:
-                raise ValueError("Nenhum servidor do gofile encontrado")
-            
-            # 2. Faz o upload
-            with file_path.open("rb") as f:
-                r = await client.post(
-                    f"https://{server_name}.gofile.io/contents/uploadfile",
-                    files={"file": (file_path.name, f, "video/mp4")}
-                )
-            if r.status_code == 200:
-                data = r.json()
-                return data.get("data", {}).get("downloadPage")
+        if file_path.exists():
+            file_path.unlink()
+            logging.info("Limpeza atrasada concluída para: %s", file_path.name)
     except Exception as e:
-        logging.error("Erro no upload_large_file (gofile): %s", e)
-    return None
+        logging.error("Erro na limpeza atrasada de %s: %s", file_path.name, e)
 
 async def tg_send_video(chat_id: int, file_path: Path):
     logging.info("sendVideo: iniciando upload de %s (%.1f MB)", file_path.name, file_path.stat().st_size / 1024 / 1024)
@@ -325,6 +315,7 @@ async def handle_text(chat_id: int, text: str):
     await tg_chat_action(chat_id, "typing")
     track(await tg_send_message(chat_id, f"{emoji} *Link detectado:* {label}\n🔎 Checando..."))
     file_path: Path | None = None
+    keep_file = False
     try:
         info = await asyncio.to_thread(extract_info_no_download, text, platform)
         duration = info.get("duration")
@@ -362,22 +353,25 @@ async def handle_text(chat_id: int, text: str):
                 # Extrai o link direto de download se existir no info do yt-dlp
                 direct_url = extract_direct_mp4(info)
                 
-                # Se não tem link original disponível, fazemos upload do arquivo que já baixamos!
+                # Se não tem link original disponível, hospedamos o arquivo localmente!
                 if not direct_url:
-                    upload_msg = await tg_send_message(chat_id, "📦 *Vídeo.* Gerando link de download temporário... ⏳")
-                    track(upload_msg)
-                    await tg_chat_action(chat_id, "upload_document")
-                    direct_url = await upload_large_file(file_path)
+                    if PUBLIC_URL:
+                        keep_file = True
+                        direct_url = f"{PUBLIC_URL.rstrip('/')}/download/{file_path.name}"
+                        track(await tg_send_message(chat_id, "📦 *Vídeo grande.* Gerando link direto no servidor local... ⏳"))
+                    else:
+                        logging.warning("PUBLIC_URL não definida, não é possível hospedar o arquivo localmente.")
 
                 if direct_url:
                     msg = (
                         f"📦 *Vídeo grande ({size_mb:.1f} MB).* O Telegram barra envios acima do limite.\n\n"
                         f"🔗 *[Clique aqui para baixar o vídeo completo]({direct_url})*\n"
-                        f"_(O link expira em 1 hora)_"
+                        f"_(O link expira em 2 horas)_"
                     )
                 else:
                     msg = (
                         f"📦 *Vídeo grande ({size_mb:.1f} MB).* O Telegram não aceita envios tão grandes através de bots.\n"
+                        f"⚠️ *Nota:* A variável PUBLIC_URL não está configurada no bot.\n"
                         f"🔗 Assista pelo link original do post:\n{text}"
                     )
                 await tg_send_message(chat_id, msg)
@@ -438,10 +432,13 @@ async def handle_text(chat_id: int, text: str):
             await tg_delete_message(chat_id, err_id)
     finally:
         try:
-            if file_path:
-                if file_path.exists():
+            if file_path and file_path.exists():
+                if not keep_file:
                     file_path.unlink()
-                logging.info("Limpeza de arquivos concluída para: %s", file_path.stem)
+                    logging.info("Limpeza de arquivos concluída para: %s", file_path.stem)
+                else:
+                    logging.info("Arquivo mantido para download via rota interna: %s", file_path.stem)
+                    asyncio.create_task(delayed_delete(file_path))
         except Exception:
             pass
 # =========================
@@ -450,6 +447,14 @@ async def handle_text(chat_id: int, text: str):
 @app.get("/")
 def health():
     return {"ok": True}
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    file_path = DOWNLOAD_DIR / filename
+    if not file_path.exists():
+        return {"error": "Arquivo não encontrado ou já expirou."}
+    return FileResponse(path=file_path, filename=filename, media_type="video/mp4")
+
 @app.post("/telegram")
 async def telegram_webhook(req: Request):
     data = await req.json()
