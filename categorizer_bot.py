@@ -3,9 +3,11 @@ import asyncio
 import logging
 import base64
 import re
+import subprocess
 from pathlib import Path
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
+from telethon.tl.types import DocumentAttributeVideo
 import yt_dlp
 
 # Configuração de Logs
@@ -155,14 +157,34 @@ async def category_callback(event):
             raise Exception("O vídeo não pôde ser salvo corretamente.")
 
         tamanho_mb = file_path.stat().st_size / (1024 * 1024)
-        await msg.edit(f"🚀 **Download concluído!** ({tamanho_mb:.1f} MB)\nFazendo upload pelo Userbot...")
+        await msg.edit(f"🚀 **Download concluído!** ({tamanho_mb:.1f} MB)\nGerando miniatura e enviando...")
         
-        # Upload com o Userbot para evitar o limite de 50MB
+        # Extrair metadados do yt-dlp
+        duration = int(info.get('duration') or 0)
+        width = int(info.get('width') or 0)
+        height = int(info.get('height') or 0)
+        
+        # Gerar miniatura (thumbnail) usando ffmpeg
+        thumb_path = file_path.with_suffix('.jpg')
+        # Tenta pegar frame no segundo 1
+        subprocess.run(['ffmpeg', '-y', '-i', str(file_path), '-ss', '00:00:01.000', '-vframes', '1', str(thumb_path)], capture_output=True)
+        if not thumb_path.exists():
+            # Tenta pegar o primeiro frame se o vídeo for muito curto
+            subprocess.run(['ffmpeg', '-y', '-i', str(file_path), '-vframes', '1', str(thumb_path)], capture_output=True)
+
+        # Upload com o Userbot passando os atributos corretos
         await userbot.send_file(
             GROUP_ID, 
             file=file_path, 
             reply_to=topic_id,
-            caption=f"📂 **{cat_name}**"
+            caption=f"📂 **{cat_name}**",
+            thumb=str(thumb_path) if thumb_path.exists() else None,
+            attributes=[DocumentAttributeVideo(
+                duration=duration,
+                w=width,
+                h=height,
+                supports_streaming=True
+            )]
         )
         
         await msg.edit(f"✅ **Sucesso!**\nVídeo de {tamanho_mb:.1f} MB enviado para o tópico **{cat_name}**.")
@@ -170,6 +192,8 @@ async def category_callback(event):
         # Limpeza
         if file_path.exists():
             file_path.unlink()
+        if thumb_path.exists():
+            thumb_path.unlink()
             
     except Exception as e:
         logging.error(f"Erro no processamento: {e}")
