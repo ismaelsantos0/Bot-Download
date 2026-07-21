@@ -172,12 +172,19 @@ async def category_callback(event):
             # Tenta pegar o primeiro frame se o vídeo for muito curto
             subprocess.run(['ffmpeg', '-y', '-i', str(file_path), '-vframes', '1', str(thumb_path)], capture_output=True)
 
+        # Tenta extrair o título do vídeo e resumir
+        title = info.get('title', '').strip()
+        if len(title) > 60:
+            title = title[:57] + "..."
+            
+        caption_text = f"🎬 **{title}**" if title else ""
+
         # Upload com o Userbot passando os atributos corretos
         await userbot.send_file(
             GROUP_ID, 
             file=file_path, 
             reply_to=topic_id,
-            caption=f"📂 **{cat_name}**",
+            caption=caption_text,
             thumb=str(thumb_path) if thumb_path.exists() else None,
             attributes=[DocumentAttributeVideo(
                 duration=duration,
