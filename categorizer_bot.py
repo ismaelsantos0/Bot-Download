@@ -58,6 +58,16 @@ async def id_handler(event):
 
 async def main():
     logging.info("Iniciando Bot e Userbot...")
+    
+    # Remover o Webhook antigo que o main.py estava usando
+    if BOT_TOKEN:
+        import httpx
+        try:
+            r = httpx.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
+            logging.info(f"Webhook deletado: {r.json()}")
+        except Exception as e:
+            logging.error(f"Erro ao deletar webhook: {e}")
+
     # Inicia o userbot
     await userbot.start()
     logging.info("Userbot conectado com sucesso!")
