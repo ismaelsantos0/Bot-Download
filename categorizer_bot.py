@@ -163,80 +163,80 @@ async def title_callback(event):
     async with fila_processamento:
         await msg.edit(f"⏳ **Baixando vídeo** da categoria **{cat_name}**...\nIsso pode demorar um pouco dependendo do tamanho.")
         try:
-        # Configuração do yt-dlp
-        ydl_opts = {
-            'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'merge_output_format': 'mp4',
-            'quiet': True,
-            'no_warnings': True,
-        }
-        
-        # Adiciona cookies se for Twitter ou Instagram
-        cf = _cookiefile_for(url)
-        if cf:
-            ydl_opts['cookiefile'] = cf
-        
-        # Download
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = await asyncio.to_thread(ydl.extract_info, url, download=True)
-            # Tenta descobrir o nome final do arquivo
-            file_path = Path(ydl.prepare_filename(info))
+            # Configuração do yt-dlp
+            ydl_opts = {
+                'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'merge_output_format': 'mp4',
+                'quiet': True,
+                'no_warnings': True,
+            }
+            
+            # Adiciona cookies se for Twitter ou Instagram
+            cf = _cookiefile_for(url)
+            if cf:
+                ydl_opts['cookiefile'] = cf
+            
+            # Download
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = await asyncio.to_thread(ydl.extract_info, url, download=True)
+                # Tenta descobrir o nome final do arquivo
+                file_path = Path(ydl.prepare_filename(info))
+                if not file_path.exists():
+                    file_path = file_path.with_suffix('.mp4')
+                    
             if not file_path.exists():
-                file_path = file_path.with_suffix('.mp4')
+                raise Exception("O vídeo não pôde ser salvo corretamente.")
+
+            tamanho_mb = file_path.stat().st_size / (1024 * 1024)
+            await msg.edit(f"🚀 **Download concluído!** ({tamanho_mb:.1f} MB)\nGerando miniatura e enviando...")
+            
+            # Extrair metadados do yt-dlp
+            duration = int(info.get('duration') or 0)
+            width = int(info.get('width') or 0)
+            height = int(info.get('height') or 0)
+            
+            # Gerar miniatura (thumbnail) usando ffmpeg
+            thumb_path = file_path.with_suffix('.jpg')
+            # Tenta pegar frame no segundo 1
+            subprocess.run(['ffmpeg', '-y', '-i', str(file_path), '-ss', '00:00:01.000', '-vframes', '1', str(thumb_path)], capture_output=True)
+            if not thumb_path.exists():
+                # Tenta pegar o primeiro frame se o vídeo for muito curto
+                subprocess.run(['ffmpeg', '-y', '-i', str(file_path), '-vframes', '1', str(thumb_path)], capture_output=True)
+
+            # Tenta extrair o título do vídeo e resumir
+            title = info.get('title', '').strip()
+            if len(title) > 60:
+                title = title[:57] + "..."
                 
-        if not file_path.exists():
-            raise Exception("O vídeo não pôde ser salvo corretamente.")
+            caption_text = f"🎬 **{title}**" if (title and choice == "yes") else ""
 
-        tamanho_mb = file_path.stat().st_size / (1024 * 1024)
-        await msg.edit(f"🚀 **Download concluído!** ({tamanho_mb:.1f} MB)\nGerando miniatura e enviando...")
-        
-        # Extrair metadados do yt-dlp
-        duration = int(info.get('duration') or 0)
-        width = int(info.get('width') or 0)
-        height = int(info.get('height') or 0)
-        
-        # Gerar miniatura (thumbnail) usando ffmpeg
-        thumb_path = file_path.with_suffix('.jpg')
-        # Tenta pegar frame no segundo 1
-        subprocess.run(['ffmpeg', '-y', '-i', str(file_path), '-ss', '00:00:01.000', '-vframes', '1', str(thumb_path)], capture_output=True)
-        if not thumb_path.exists():
-            # Tenta pegar o primeiro frame se o vídeo for muito curto
-            subprocess.run(['ffmpeg', '-y', '-i', str(file_path), '-vframes', '1', str(thumb_path)], capture_output=True)
-
-        # Tenta extrair o título do vídeo e resumir
-        title = info.get('title', '').strip()
-        if len(title) > 60:
-            title = title[:57] + "..."
+            # Upload com o Userbot passando os atributos corretos
+            await userbot.send_file(
+                GROUP_ID, 
+                file=file_path, 
+                reply_to=topic_id,
+                caption=caption_text,
+                thumb=str(thumb_path) if thumb_path.exists() else None,
+                attributes=[DocumentAttributeVideo(
+                    duration=duration,
+                    w=width,
+                    h=height,
+                    supports_streaming=True
+                )]
+            )
             
-        caption_text = f"🎬 **{title}**" if (title and choice == "yes") else ""
-
-        # Upload com o Userbot passando os atributos corretos
-        await userbot.send_file(
-            GROUP_ID, 
-            file=file_path, 
-            reply_to=topic_id,
-            caption=caption_text,
-            thumb=str(thumb_path) if thumb_path.exists() else None,
-            attributes=[DocumentAttributeVideo(
-                duration=duration,
-                w=width,
-                h=height,
-                supports_streaming=True
-            )]
-        )
-        
-        await msg.edit(f"✅ **Sucesso!**\nVídeo de {tamanho_mb:.1f} MB enviado para o tópico **{cat_name}**.")
-        
-        # Limpeza
-        if file_path.exists():
-            file_path.unlink()
-        if thumb_path.exists():
-            thumb_path.unlink()
+            await msg.edit(f"✅ **Sucesso!**\nVídeo de {tamanho_mb:.1f} MB enviado para o tópico **{cat_name}**.")
             
-    except Exception as e:
-        logging.error(f"Erro no processamento: {e}")
-        await msg.edit(f"❌ **Ocorreu um erro.**\n\nDetalhes: `{e}`")
+            # Limpeza
+            if file_path.exists():
+                file_path.unlink()
+            if thumb_path.exists():
+                thumb_path.unlink()
+                
+        except Exception as e:
+            logging.error(f"Erro no processamento: {e}")
+            await msg.edit(f"❌ **Ocorreu um erro.**\n\nDetalhes: `{e}`")
 
 
 async def main():
