@@ -1,6 +1,8 @@
 import os
 import asyncio
 import logging
+import base64
+import re
 from pathlib import Path
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
@@ -37,6 +39,35 @@ CATEGORIES = {
 
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# =========================
+# CONFIGURAÇÃO DE COOKIES
+# =========================
+IG_COOKIES_B64 = (os.environ.get("IG_COOKIES_B64") or "").strip()
+X_COOKIES_B64 = (os.environ.get("X_COOKIES_B64") or "").strip()
+IG_COOKIE_PATH = Path("cookies_ig.txt")
+X_COOKIE_PATH = Path("cookies_x.txt")
+
+def _write_cookiefile(b64_value: str, path: Path, label: str):
+    if not b64_value:
+        logging.warning(f"{label}: Cookies não configurados.")
+        return
+    try:
+        path.write_bytes(base64.b64decode(b64_value))
+        logging.info(f"{label} cookies carregados.")
+    except Exception as e:
+        logging.error(f"Falha ao criar cookie {label}: {e}")
+
+_write_cookiefile(IG_COOKIES_B64, IG_COOKIE_PATH, "Instagram")
+_write_cookiefile(X_COOKIES_B64, X_COOKIE_PATH, "X/Twitter")
+
+def _cookiefile_for(link: str) -> str | None:
+    link = link.lower()
+    if "instagram.com" in link and IG_COOKIE_PATH.exists():
+        return str(IG_COOKIE_PATH)
+    if ("x.com" in link or "twitter.com" in link) and X_COOKIE_PATH.exists():
+        return str(X_COOKIE_PATH)
+    return None
 
 # =========================
 # CLIENTES TELEGRAM
@@ -106,6 +137,11 @@ async def category_callback(event):
             'quiet': True,
             'no_warnings': True,
         }
+        
+        # Adiciona cookies se for Twitter ou Instagram
+        cf = _cookiefile_for(url)
+        if cf:
+            ydl_opts['cookiefile'] = cf
         
         # Download
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
