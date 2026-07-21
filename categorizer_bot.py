@@ -102,7 +102,7 @@ async def id_handler(event):
 async def link_handler(event):
     # Quando o usuário envia um link, salvamos e mostramos os botões
     url = event.text.strip()
-    user_pending_links[event.sender_id] = url
+    user_pending_links[event.sender_id] = {"url": url, "topic_id": None}
     
     buttons = []
     row = []
@@ -125,7 +125,29 @@ async def category_callback(event):
         await event.answer("Nenhum link pendente! Envie o link novamente.", alert=True)
         return
         
-    url = user_pending_links.pop(user_id)
+    # Salva a categoria escolhida e pergunta sobre o título
+    user_pending_links[user_id]["topic_id"] = topic_id
+    cat_name = next((name for name, tid in CATEGORIES.items() if tid == topic_id), "Desconhecida")
+    
+    buttons = [
+        [Button.inline("Com Título", data="title_yes"), Button.inline("Sem Título", data="title_no")]
+    ]
+    
+    await event.edit(f"Categoria **{cat_name}** selecionada.\n\nDeseja que o vídeo seja enviado com o título original na legenda?", buttons=buttons)
+
+@bot.on(events.CallbackQuery(pattern=b'^title_(.*)'))
+async def title_callback(event):
+    choice = event.data.decode().split('_')[1]
+    user_id = event.sender_id
+    
+    if user_id not in user_pending_links or user_pending_links[user_id].get("topic_id") is None:
+        await event.answer("Processo expirado. Envie o link novamente.", alert=True)
+        return
+        
+    data = user_pending_links.pop(user_id)
+    url = data["url"]
+    topic_id = data["topic_id"]
+    
     cat_name = next((name for name, tid in CATEGORIES.items() if tid == topic_id), "Desconhecida")
     
     msg = await event.edit(f"⏳ **Baixando vídeo** da categoria **{cat_name}**...\nIsso pode demorar um pouco dependendo do tamanho.")
@@ -177,7 +199,7 @@ async def category_callback(event):
         if len(title) > 60:
             title = title[:57] + "..."
             
-        caption_text = f"🎬 **{title}**" if title else ""
+        caption_text = f"🎬 **{title}**" if (title and choice == "yes") else ""
 
         # Upload com o Userbot passando os atributos corretos
         await userbot.send_file(
