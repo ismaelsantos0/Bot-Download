@@ -72,13 +72,17 @@ def _cookiefile_for(link: str) -> str | None:
     return None
 
 # =========================
-# CLIENTES TELEGRAM
+# CLIENTES TELEGRAM E FILA
 # =========================
 bot = TelegramClient("bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 userbot = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# Armazena temporariamente o link enviado por cada usuário
-user_pending_links = {}
+# Armazena temporariamente o link enviado por cada mensagem (para não sobrepor)
+message_pending_links = {}
+
+# Limita o número de downloads/uploads simultâneos para não travar o servidor (Railway) e não levar block do Telegram
+MAX_CONCURRENT = 2
+fila_processamento = asyncio.Semaphore(MAX_CONCURRENT)
 
 # =========================
 # ROTAS DO BOT
@@ -100,14 +104,15 @@ async def id_handler(event):
 
 @bot.on(events.NewMessage(pattern='(?i)^https?://.*'))
 async def link_handler(event):
-    # Quando o usuário envia um link, salvamos e mostramos os botões
+    # Salva o link atrelado ao ID da mensagem do usuário para não sobrescrever se ele mandar vários rápidos
     url = event.text.strip()
-    user_pending_links[event.sender_id] = {"url": url, "topic_id": None}
+    msg_id = event.message.id
+    message_pending_links[msg_id] = {"url": url, "topic_id": None}
     
     buttons = []
     row = []
     for name, topic_id in CATEGORIES.items():
-        row.append(Button.inline(name, data=f"cat_{topic_id}"))
+        row.append(Button.inline(name, data=f"cat_{topic_id}_{msg_id}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
@@ -118,41 +123,46 @@ async def link_handler(event):
 
 @bot.on(events.CallbackQuery(pattern=b'^cat_(.*)'))
 async def category_callback(event):
-    topic_id = int(event.data.decode().split('_')[1])
-    user_id = event.sender_id
+    data_parts = event.data.decode().split('_')
+    topic_id = int(data_parts[1])
+    original_msg_id = int(data_parts[2])
     
-    if user_id not in user_pending_links:
-        await event.answer("Nenhum link pendente! Envie o link novamente.", alert=True)
+    if original_msg_id not in message_pending_links:
+        await event.answer("Nenhum link pendente para esta mensagem!", alert=True)
         return
         
     # Salva a categoria escolhida e pergunta sobre o título
-    user_pending_links[user_id]["topic_id"] = topic_id
+    message_pending_links[original_msg_id]["topic_id"] = topic_id
     cat_name = next((name for name, tid in CATEGORIES.items() if tid == topic_id), "Desconhecida")
     
     buttons = [
-        [Button.inline("Com Título", data="title_yes"), Button.inline("Sem Título", data="title_no")]
+        [Button.inline("Com Título", data=f"title_yes_{original_msg_id}"), Button.inline("Sem Título", data=f"title_no_{original_msg_id}")]
     ]
     
     await event.edit(f"Categoria **{cat_name}** selecionada.\n\nDeseja que o vídeo seja enviado com o título original na legenda?", buttons=buttons)
 
 @bot.on(events.CallbackQuery(pattern=b'^title_(.*)'))
 async def title_callback(event):
-    choice = event.data.decode().split('_')[1]
-    user_id = event.sender_id
+    data_parts = event.data.decode().split('_')
+    choice = data_parts[1]
+    original_msg_id = int(data_parts[2])
     
-    if user_id not in user_pending_links or user_pending_links[user_id].get("topic_id") is None:
-        await event.answer("Processo expirado. Envie o link novamente.", alert=True)
+    if original_msg_id not in message_pending_links or message_pending_links[original_msg_id].get("topic_id") is None:
+        await event.answer("Processo expirado ou link não encontrado.", alert=True)
         return
         
-    data = user_pending_links.pop(user_id)
+    data = message_pending_links.pop(original_msg_id)
     url = data["url"]
     topic_id = data["topic_id"]
     
     cat_name = next((name for name, tid in CATEGORIES.items() if tid == topic_id), "Desconhecida")
     
-    msg = await event.edit(f"⏳ **Baixando vídeo** da categoria **{cat_name}**...\nIsso pode demorar um pouco dependendo do tamanho.")
+    msg = await event.edit(f"⏳ **Na fila...**\nO vídeo da categoria **{cat_name}** aguarda sua vez.")
     
-    try:
+    # Entra na fila de semáforo
+    async with fila_processamento:
+        await msg.edit(f"⏳ **Baixando vídeo** da categoria **{cat_name}**...\nIsso pode demorar um pouco dependendo do tamanho.")
+        try:
         # Configuração do yt-dlp
         ydl_opts = {
             'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
