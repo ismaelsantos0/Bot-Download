@@ -172,9 +172,9 @@ async def title_callback(event):
                 'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
                 'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                 'merge_output_format': 'mp4',
-                'quiet': True,
-                'no_warnings': True,
-                'impersonate': 'chrome',
+                'quiet': False,
+                'no_warnings': False,
+                'verbose': True,
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
                 }
