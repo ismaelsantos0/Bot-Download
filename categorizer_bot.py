@@ -119,13 +119,17 @@ async def link_handler(event):
     if row:
         buttons.append(row)
         
+    buttons.append([Button.inline("⬇️ Receber aqui no Bot", data=f"cat_local_{msg_id}")])
+        
     await event.reply("🔗 **Link recebido!**\nEscolha a categoria para enviar o vídeo:", buttons=buttons)
 
 @bot.on(events.CallbackQuery(pattern=b'^cat_(.*)'))
 async def category_callback(event):
     data_parts = event.data.decode().split('_')
-    topic_id = int(data_parts[1])
+    topic_str = data_parts[1]
     original_msg_id = int(data_parts[2])
+    
+    topic_id = 0 if topic_str == "local" else int(topic_str)
     
     if original_msg_id not in message_pending_links:
         await event.answer("Nenhum link pendente para esta mensagem!", alert=True)
@@ -133,7 +137,7 @@ async def category_callback(event):
         
     # Salva a categoria escolhida e pergunta sobre o título
     message_pending_links[original_msg_id]["topic_id"] = topic_id
-    cat_name = next((name for name, tid in CATEGORIES.items() if tid == topic_id), "Desconhecida")
+    cat_name = "Download Local" if topic_id == 0 else next((name for name, tid in CATEGORIES.items() if tid == topic_id), "Desconhecida")
     
     buttons = [
         [Button.inline("Com Título", data=f"title_yes_{original_msg_id}"), Button.inline("Sem Título", data=f"title_no_{original_msg_id}")]
@@ -155,7 +159,7 @@ async def title_callback(event):
     url = data["url"]
     topic_id = data["topic_id"]
     
-    cat_name = next((name for name, tid in CATEGORIES.items() if tid == topic_id), "Desconhecida")
+    cat_name = "Download Local" if topic_id == 0 else next((name for name, tid in CATEGORIES.items() if tid == topic_id), "Desconhecida")
     
     msg = await event.edit(f"⏳ **Na fila...**\nO vídeo da categoria **{cat_name}** aguarda sua vez.")
     
@@ -211,22 +215,40 @@ async def title_callback(event):
                 
             caption_text = f"🎬 **{title}**" if (title and choice == "yes") else ""
 
-            # Upload com o Userbot passando os atributos corretos
-            await userbot.send_file(
-                GROUP_ID, 
-                file=file_path, 
-                reply_to=topic_id,
-                caption=caption_text,
-                thumb=str(thumb_path) if thumb_path.exists() else None,
-                attributes=[DocumentAttributeVideo(
-                    duration=duration,
-                    w=width,
-                    h=height,
-                    supports_streaming=True
-                )]
-            )
-            
-            await msg.edit(f"✅ **Sucesso!**\nVídeo de {tamanho_mb:.1f} MB enviado para o tópico **{cat_name}**.")
+            if topic_id == 0:
+                # Enviar no próprio chat do bot
+                if tamanho_mb > 49.5:
+                    await msg.edit("❌ **O vídeo é maior que 50MB.**\n\nO Telegram não permite que bots enviem arquivos tão grandes diretamente no chat privado. Escolha uma das categorias do Grupo para usar o Userbot ilimitado.")
+                else:
+                    await bot.send_file(
+                        event.chat_id, 
+                        file=file_path, 
+                        caption=caption_text,
+                        thumb=str(thumb_path) if thumb_path.exists() else None,
+                        attributes=[DocumentAttributeVideo(
+                            duration=duration,
+                            w=width,
+                            h=height,
+                            supports_streaming=True
+                        )]
+                    )
+                    await msg.edit(f"✅ **Sucesso!**\nVídeo de {tamanho_mb:.1f} MB enviado aqui no chat.")
+            else:
+                # Upload com o Userbot passando os atributos corretos
+                await userbot.send_file(
+                    GROUP_ID, 
+                    file=file_path, 
+                    reply_to=topic_id,
+                    caption=caption_text,
+                    thumb=str(thumb_path) if thumb_path.exists() else None,
+                    attributes=[DocumentAttributeVideo(
+                        duration=duration,
+                        w=width,
+                        h=height,
+                        supports_streaming=True
+                    )]
+                )
+                await msg.edit(f"✅ **Sucesso!**\nVídeo de {tamanho_mb:.1f} MB enviado para o tópico **{cat_name}**.")
             
             # Limpeza
             if file_path.exists():
