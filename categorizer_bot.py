@@ -174,6 +174,9 @@ async def title_callback(event):
                 'merge_output_format': 'mp4',
                 'quiet': True,
                 'no_warnings': True,
+                'extractor_args': {
+                    'tiktok': ['api_hostname=api16-normal-c-useast1a.tiktokv.com'],
+                },
             }
             
             # Adiciona cookies se for Twitter ou Instagram
