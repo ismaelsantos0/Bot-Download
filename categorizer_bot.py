@@ -238,20 +238,37 @@ async def title_callback(event):
                     )
                     await msg.edit(f"✅ **Sucesso!**\nVídeo de {tamanho_mb:.1f} MB enviado aqui no chat.")
             else:
-                # Upload com o Userbot passando os atributos corretos
-                await userbot.send_file(
-                    GROUP_ID, 
-                    file=file_path, 
-                    reply_to=topic_id,
-                    caption=caption_text,
-                    thumb=str(thumb_path) if thumb_path.exists() else None,
-                    attributes=[DocumentAttributeVideo(
-                        duration=duration,
-                        w=width,
-                        h=height,
-                        supports_streaming=True
-                    )]
-                )
+                # Enviar para o Grupo
+                if tamanho_mb <= 49.5:
+                    # Para vídeos normais/pequenos (TikTok, Reels), usa o Bot Oficial
+                    await bot.send_file(
+                        GROUP_ID, 
+                        file=file_path, 
+                        reply_to=topic_id,
+                        caption=caption_text,
+                        thumb=str(thumb_path) if thumb_path.exists() else None,
+                        attributes=[DocumentAttributeVideo(
+                            duration=duration,
+                            w=width,
+                            h=height,
+                            supports_streaming=True
+                        )]
+                    )
+                else:
+                    # Para vídeos gigantes (+50MB), apela para o Userbot
+                    await userbot.send_file(
+                        GROUP_ID, 
+                        file=file_path, 
+                        reply_to=topic_id,
+                        caption=caption_text,
+                        thumb=str(thumb_path) if thumb_path.exists() else None,
+                        attributes=[DocumentAttributeVideo(
+                            duration=duration,
+                            w=width,
+                            h=height,
+                            supports_streaming=True
+                        )]
+                    )
                 await msg.edit(f"✅ **Sucesso!**\nVídeo de {tamanho_mb:.1f} MB enviado para o tópico **{cat_name}**.")
             
             # Limpeza
