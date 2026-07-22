@@ -9,8 +9,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Garante yt-dlp sempre atualizado no build
-RUN pip install -U yt-dlp
+
+# Garante que o yt-dlp do git master já está instalado via requirements.txt
 
 COPY . .
 
