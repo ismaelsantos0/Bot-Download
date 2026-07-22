@@ -9,7 +9,6 @@ from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.tl.types import DocumentAttributeVideo
 import yt_dlp
-from yt_dlp.networking.common import ImpersonateTarget
 
 # Configuração de Logs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -175,7 +174,6 @@ async def title_callback(event):
                 'merge_output_format': 'mp4',
                 'quiet': True,
                 'no_warnings': True,
-                'impersonate': ImpersonateTarget('chrome'),
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
                 }

@@ -1,7 +1,6 @@
 fastapi
 uvicorn
 httpx
-yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@master
 curl_cffi
 python-multipart
 telethon

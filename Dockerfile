@@ -10,7 +10,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 
-# Garante que o yt-dlp do git master já está instalado via requirements.txt
+# Instala o yt-dlp master (versão mais recente com fixes de TikTok)
+RUN pip install -U "yt-dlp[default] @ git+https://github.com/yt-dlp/yt-dlp.git@master"
 
 COPY . .
 
